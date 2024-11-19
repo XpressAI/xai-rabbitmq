@@ -9,13 +9,6 @@ class RabbitMQConnect(Component):
     username: InArg[str]
     password: InArg[str]
 
-    def __init__(self):
-        self.done = False
-        self.broker = InArg.empty()
-        self.port = InArg.empty()
-        self.username = InArg.empty()
-        self.password = InArg.empty()
-
     def execute(self, ctx) -> None:
         if self.username.value is not None:
             credentials = pika.PlainCredentials(self.username.value, self.password.value)
@@ -42,14 +35,6 @@ class RabbitMQPublish(Component):
     exchange: InArg[str]
     message: InArg[str]
 
-
-    def __init__(self):
-        self.done = False
-        self.queue = InArg.empty()
-        self.routing_key = InArg.empty()
-        self.exchange = InArg.empty()
-        self.message = InArg.empty()
-
     def execute(self, ctx) -> None:
         channel = ctx['rabbitmq_channel']
 
@@ -70,13 +55,6 @@ class RabbitMQConsume(Component):
     exchange: InArg[str]
     routing_key: InArg[str]
     message: OutArg[str]
-
-    def __init__(self):
-        self.done = False
-        self.queue = InArg.empty()
-        self.exchange = InArg.empty()
-        self.routing_key = InArg.empty()
-        self.message = OutArg.empty()
 
     def execute(self, ctx) -> None:
         channel = ctx['rabbitmq_channel']
@@ -102,8 +80,6 @@ class RabbitMQConsume(Component):
 
 @xai_component
 class RabbitMQStartConsuming(Component):
-    def __init__(self):
-        self.done = False
 
     def execute(self, ctx) -> None:
         channel = ctx['rabbitmq_channel']
@@ -116,8 +92,6 @@ class RabbitMQStartConsuming(Component):
 
 @xai_component
 class RabbitMQDisconnect(Component):
-    def __init__(self):
-        self.done = False
 
     def execute(self, ctx) -> None:
         client = ctx['rabbitmq_client']
