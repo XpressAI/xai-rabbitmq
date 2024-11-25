@@ -1,0 +1,144 @@
+name: Run Xircuits Workflows Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: "*"
+  workflow_dispatch:
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11"]
+    env:
+      TEST_XIRCUITS: |
+        examples/rabbitmq_sample.xircuits
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Create virtual environment
+      run: |
+        python -m venv venv
+        echo "${{ github.workspace }}/venv/bin" >> $GITHUB_PATH
+        source venv/bin/activate
+        pip install --upgrade pip
+
+    - name: Install xircuits in virtual environment
+      run: pip install xircuits
+
+    - name: Set Environment Variables
+      run: |
+        LIBRARY_NAME=$(echo "${GITHUB_REPOSITORY##*/}" | sed 's/-/_/g')
+        echo "LIBRARY_NAME=$LIBRARY_NAME" >> $GITHUB_ENV
+        COMPONENT_LIBRARY_PATH="xai_components/${LIBRARY_NAME}"
+        echo "COMPONENT_LIBRARY_PATH=$COMPONENT_LIBRARY_PATH" >> $GITHUB_ENV
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          echo "BRANCH_NAME=${{ github.head_ref }}" >> $GITHUB_ENV
+        else
+          echo "BRANCH_NAME=${GITHUB_REF#refs/heads/}" >> $GITHUB_ENV
+        fi
+
+    - name: List Xircuits
+      run: xircuits list
+
+    - name: Clone Repository
+      run: |
+        rm -rf ${{ env.COMPONENT_LIBRARY_PATH }}
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          REPO_URL="${{ github.event.pull_request.head.repo.clone_url }}"
+        else
+          REPO_URL="https://github.com/${{ github.repository }}"
+        fi
+        git clone -b ${{ env.BRANCH_NAME }} $REPO_URL ${{ env.COMPONENT_LIBRARY_PATH }}
+
+    - name: Install Component Library
+      run: |
+        if [ -f "${{ env.COMPONENT_LIBRARY_PATH }}/requirements.txt" ]; then
+          echo "requirements.txt found, installing dependencies..."
+          pip install -r ${{ env.COMPONENT_LIBRARY_PATH }}/requirements.txt
+        else
+          echo "requirements.txt not found."
+        fi
+
+    - name: Install RabbitMQ
+      run: |
+        sudo apt update
+        sudo apt install rabbitmq-server -y
+        sudo systemctl start rabbitmq-server
+        sudo systemctl status rabbitmq-server
+
+
+    - name: Test RabbitMQ Workflow
+      run: |
+        LOG_FILE="${GITHUB_WORKSPACE}/workflow_logs.txt"
+        echo "Starting RabbitMQ and Python script test..." > $LOG_FILE
+    
+        # Compile the Xircuits workflow
+        FULL_PATH="${COMPONENT_LIBRARY_PATH}/${TEST_XIRCUITS}"
+        echo "Compiling Xircuits workflow: ${FULL_PATH}" >> $LOG_FILE
+        xircuits compile $FULL_PATH "${FULL_PATH%.*}.py" 2>&1 | tee -a $LOG_FILE
+    
+        # Run the Python script in the background
+        export PYTHONPATH="${GITHUB_WORKSPACE}:${PYTHONPATH}"
+        echo "Running Python script: ${FULL_PATH%.*}.py" >> $LOG_FILE
+        python "${FULL_PATH%.*}.py" 2>&1 | tee -a $LOG_FILE &
+        PYTHON_PID=$!
+    
+        # Wait for the Python script to initialize
+        echo "Waiting 10 seconds for the Python script to initialize..." >> $LOG_FILE
+        sleep 10
+    
+        # Run RabbitMQ message publisher
+        echo "Publishing message to RabbitMQ queue 'testing'..." >> $LOG_FILE
+        python - <<EOF
+        import pika
+        connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+        channel = connection.channel()
+        channel.queue_declare(queue='testing')
+        channel.basic_publish(exchange='', routing_key='testing', body='Hello, RabbitMQ!')
+        print(" [x] Sent 'Hello, RabbitMQ'")
+        connection.close()
+        EOF
+            sleep 5
+    
+        # Check if the Python script produced the expected output
+        echo "Checking for expected output: 'Hello, RabbitMQ!!!'" >> $LOG_FILE
+        if grep -q "Hello, RabbitMQ!!!" $LOG_FILE; then
+          echo "RabbitMQ test successful: 'Hello, RabbitMQ!!!' received." | tee -a $LOG_FILE
+        else
+          echo "RabbitMQ test failed: Expected output not received." | tee -a $LOG_FILE
+          # Kill the Python process in case of failure
+          if ps -p $PYTHON_PID > /dev/null; then
+            echo "Killing Python script process (PID: $PYTHON_PID)..." >> $LOG_FILE
+            kill -9 $PYTHON_PID
+          fi
+          exit 1
+        fi
+    
+        # Check if the Python script is still running, and if so, kill it
+        if ps -p $PYTHON_PID > /dev/null; then
+          echo "Python script ran successfully for the duration of the test. Killing the process..." | tee -a $LOG_FILE
+          kill -9 $PYTHON_PID
+        else
+          echo "Python script finished execution before the test completed." | tee -a $LOG_FILE
+        fi
+    
+        echo "RabbitMQ and Python script test completed." >> $LOG_FILE
+        
+    - name: Upload log file
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.LIBRARY_NAME }}-validation-workflow-${{ matrix.python-version }}
+        path: ${{ github.workspace }}/workflow_logs.txt
