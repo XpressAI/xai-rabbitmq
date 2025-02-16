@@ -8,6 +8,7 @@ class RabbitMQConnect(Component):
     port: InArg[int]
     username: InArg[str]
     password: InArg[str]
+    vhost: InArg[str]
 
     def execute(self, ctx) -> None:
         if self.username.value is not None:
@@ -15,14 +16,14 @@ class RabbitMQConnect(Component):
             parameters = pika.ConnectionParameters(
                 host=self.broker.value,
                 port=self.port.value,
-                virtual_host='/',
+                virtual_host=self.vhost.value if self.vhost.value is not None else '/',
                 credentials=credentials)
             client = pika.BlockingConnection(parameters)
         else:
             parameters = pika.ConnectionParameters(
                 host=self.broker.value,
                 port=self.port.value,
-                virtual_host='/')
+                virtual_host=self.vhost.value if self.vhost.value is not None else '/')
             client = pika.BlockingConnection(parameters)
 
         ctx['rabbitmq_client'] = client
